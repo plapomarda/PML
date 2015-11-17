@@ -1,0 +1,119 @@
+---
+title: "Exercise Machine"
+author: "Pat Lapomarda"
+date: "November 12, 2015"
+output: html_document
+---
+
+#Exexcutive Summary
+
+The goal of this project is to predict the manner in which subjects did the exercise (correctly or incorrectly). This report describes the data pre-processing (including target variable transformation), building of the classifier (including the use cross validation), the expected out of sample error, and a discussion of the model selection choice. Finally, the classifier is used to predict 20 different test cases. 
+
+#Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways (Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes). More information is available from the website here: <http://groupware.les.inf.puc-rio.br/har#weight_lifting_exercises>. 
+
+
+
+#Data 
+
+
+The training data for this project are available here: 
+
+<https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv>
+
+The test data are available here: 
+
+<https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv>
+
+Download & create data frames for both data sets.
+
+```{r Load Data}
+setwd("~/Documents/Class/Practical Machine Learning")
+if(!file.exists("./data")){dir.create("./data")}
+fileURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+download.file(fileURL,destfile="./data/pml-training.csv",method="curl")
+fileURL2 <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+download.file(fileURL2,destfile="./data/pml-testing.csv",method="curl")
+training<-read.csv("./data/pml-training.csv")
+testing<-read.csv("./data/pml-testing.csv")
+rm(fileURL,fileURL2)
+```
+
+The target variable of interest is `classe`.  Additionally, many of the variables are sparsely populated.  Some are almost always missing; others are interpretted as factors when numeric because they are undefined as the result of division by 0 (`#DIV/0!`) values. All of these could be converted into numeric data; however, we find that most of these are blank/missing across 98% of the observations (19,216 out of 19,622).  We can also find and remove these using the Near-Zero Variance (`nearZeroVar`) function in the `caret` package.  For the numerics with a high number of `NA` values, we use a simple function.
+
+```{r nearZeroVar}
+library(caret)
+nzv <- nearZeroVar(training, saveMetrics= TRUE)
+training<-training[,nzv$nzv==FALSE]
+training <- training[,colSums(is.na(training))<19216]
+rm(nzv)
+```
+
+This removed over 100 variables. Of the remaining variables, there are two timestamps and `num_window` that should be tested for any relationship to the classification.
+
+```{r time-win test}
+featurePlot(x = training[, c(3:4,6)],
+                  y = training$classe,
+                  plot = "box",
+                  ## Pass in options to bwplot() 
+                  scales = list(y = list(relation="free"),
+                                x = list(rot = 90)),
+                  layout = c(3,1 ),
+                  auto.key = list(columns = 3))
+
+```
+
+Neither of the timestamp variables point to a time-series relationship; therefore, time-dependence is not a factor to consider.  However, `num_window` does have a different pattern by `classe` and merits further study by `user_name` to confirm that there is not a deterministic pattern of the `classe` by `num_window`. 
+
+```{r win test}
+p <- ggplot(training, aes(classe, num_window))
+p <- p + geom_boxplot(aes(fill = user_name))
+p
+```
+
+
+Since `classe` & `user_name` on occasion overlap on the `num_window` scale, we can conclude that there is not a clear deterministic pattern that would overfit a classifier.  
+
+#Model Design and Selection
+
+In order to best fit a classifier without overfitting, we will start with a simple hold-out validation and move to either k-fold validation or Leave One Out Cross Validation (LOOCV) if necessary.
+
+```{r train model}
+
+set.seed(123)
+trainset <- createDataPartition(training$classe, p = 0.7, list = FALSE)
+Train <- training[trainset, ]
+Validate <- training[-trainset, ]
+
+
+fit<- classe ~ . -X -raw_timestamp_part_1 -raw_timestamp_part_2 -cvtd_timestamp -num_window
+
+
+library(randomForest)
+set.seed(345)
+rfModel <- randomForest(fit, data = Train, importance = TRUE, ntrees = 10)
+rfPredict <- predict(rfModel, Train)
+print(confusionMatrix(rfPredict, Train$classe))
+
+rfPredictV <- predict(rfModel, Validate)
+print(confusionMatrix(rfPredictV, Validate$classe))
+```
+
+#Model Error Estimation & Prediction
+
+Since `rf` (Random Forest) was able to achieve an accuracy of over 99%, no cross validation or LOOCV will be completed and the `rfModel` classifier will be used for prediction.
+
+```{r prediction}
+predictTest <-predict(rfModel,newdata=testing)
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+pml_write_files(predictTest)
+```
+
+
